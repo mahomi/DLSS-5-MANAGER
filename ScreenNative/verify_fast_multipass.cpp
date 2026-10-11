@@ -23,6 +23,9 @@ struct Host {
     int frame_slot = 0;
 };
 static Host h;
+// This standalone probe exercises desktop settings; the production worker
+// supplies this flag for its separate VR control path.
+static bool g_vr_gpu_mode = false;
 static void Log(const char *fmt, ...) {
     va_list args; va_start(args, fmt); vprintf(fmt, args); va_end(args); puts("");
 }
