@@ -11,10 +11,24 @@ open CommunityToolkit.Mvvm.Input
 open DLSS_5_MANAGER.Services
 
 /// Owns only the embedded Screen session. The games installer never uses this state.
-type ScreenViewModel(?settingsDirectory: string) as this =
+type ScreenViewModel(?settingsDirectory: string, ?vrRootDirectory: string) as this =
     inherit ViewModelBase()
 
     let dataDir = defaultArg settingsDirectory (Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DLSS5Manager", "Screen"))
+    let vr = new VrLiveFlow(?rootDirectory=vrRootDirectory)
+    let targetConfig = Path.Combine(AppContext.BaseDirectory, "live-flow-target.json")
+    let mutable targetIndex =
+        try
+            if File.Exists(targetConfig) then
+                let cfg = JsonNode.Parse(File.ReadAllText(targetConfig))
+                Math.Clamp(cfg["target"].GetValue<int>(), 0, 1)
+            else 0
+        with _ -> 0
+    let isVr () = targetIndex = 1
+    let targets = [| "Desktop"; "SteamVR (Quest)" |]
+    let vrNumber key = vr.GetNumber(key)
+    let vrStatus () = vr.ReadStatus()
+    let vrSet key (value: JsonNode) = vr.Set(key, value)
     // Manager-owned settings: the external controller does not know these keys.
     let fastConfig = Path.Combine(dataDir, "fast-multipass.json")
     let mutable fastEnabled = false
@@ -24,6 +38,7 @@ type ScreenViewModel(?settingsDirectory: string) as this =
     let mutable state = JsonObject()
     let mutable ready = false
     let mutable stopping = false
+    let mutable switchingTarget = false
     let mutable preparing = false
     let mutable preparingSince = DateTime.MinValue
     let mutable status = "Preparing Screen…"
@@ -235,7 +250,9 @@ type ScreenViewModel(?settingsDirectory: string) as this =
                      "sharpness"; "edge_smooth"; "brightness"; "contrast"; "saturation"; "warmth" ]
 
     let set key (value: JsonNode) =
-        if ready && not updating then
+        if isVr() then
+            if not updating && key = "nr" then vrSet key value
+        elif ready && not updating then
             if key = "nr" || key = "nr_small" || key = "window" || key = "passes" || key = "work_scale" || key = "gpu" || key = "monitor" then
                 preparing <- true
                 preparingSince <- DateTime.UtcNow
@@ -291,7 +308,11 @@ type ScreenViewModel(?settingsDirectory: string) as this =
             splitPending <- Double.NaN
 
     let setNumber (key: string) (value: float) =
-        if ready && not updating && (abs(number key Double.NaN - value) > 0.0001 || state[key] = null) then
+        if isVr() then
+            if not updating && List.contains key ["style"; "intensity"; "local_tone"; "local_structure"; "skin_structure"] then
+                vrSet key (if key = "style" then JsonValue.Create(int value) else JsonValue.Create(value))
+                raiseFor key
+        elif ready && not updating && (abs(number key Double.NaN - value) > 0.0001 || state[key] = null) then
             state[key] <- JsonValue.Create(value)
             recentEdits[key] <- (value, DateTime.UtcNow)
             if key = "split" then
@@ -368,6 +389,8 @@ type ScreenViewModel(?settingsDirectory: string) as this =
         with _ -> () // Only our JSON status records belong to the control channel.
 
     do
+        vr.Changed.Add(fun () -> Dispatcher.UIThread.Post(fun () -> notify()))
+        AppDomain.CurrentDomain.ProcessExit.Add(fun _ -> vr.Stop())
         try
             if File.Exists(fastConfig) then
                 let cfg = JsonNode.Parse(File.ReadAllText(fastConfig))
@@ -509,7 +532,7 @@ type ScreenViewModel(?settingsDirectory: string) as this =
     /// it is opened; until now the only way out was to leave the page, which
     /// is not something a person guesses (user: give me a way out of the
     /// ready state from the top).
-    member _.CanStop = child.IsSome && not stopping
+    member _.CanStop = (if isVr() then vr.Active else child.IsSome) && not stopping && not switchingTarget
     member _.OverlayButtonText = "Overlay · " + keyText overlayMods overlayKey
     member _.DlssButtonText = "DLSS 5 · " + keyText dlssMods dlssKey
 
@@ -571,28 +594,99 @@ type ScreenViewModel(?settingsDirectory: string) as this =
     /// The DLSS 5 shortcut: on if it was off, off if it was on.
     member this.ToggleNr() = this.Nr <- not this.Nr
 
-    member _.IsRunning = child.IsSome
-    member _.FastMultiPassEnabled
-        with get () = fastEnabled
+    member _.Targets = targets
+    member _.TargetIndex
+        with get() = targetIndex
         and set value =
-            if this.CanEditFastMultiPass && value <> fastEnabled then
+            this.SwitchTargetAsync(value) |> ignore
+    member _.SwitchTargetAsync(value: int) : Task =
+        task {
+            if value >= 0 && value <= 1 && this.CanChangeTarget && targetIndex <> value then
+                switchingTarget <- true
+                notify()
+                try
+                    do! this.StopAsync()
+                    if child |> Option.exists (fun p -> not p.HasExited) then
+                        failwith "The current desktop session has not stopped. Mode was not changed."
+                    // Exited notifications are queued on the UI thread. Retire
+                    // this controller before the destination can be started.
+                    child |> Option.iter (fun p -> p.Dispose())
+                    child <- None
+                    ready <- false
+                    stopping <- false
+                    targetIndex <- value
+                    let cfg = JsonObject()
+                    cfg["target"] <- JsonValue.Create(value)
+                    File.WriteAllText(targetConfig, cfg.ToJsonString())
+                    status <- if isVr() then "off" else "Screen stopped — press Start."
+                with ex -> setError ex.Message
+                switchingTarget <- false
+                notify()
+        }
+    member _.DesktopModeCommand = RelayCommand(fun () -> this.SwitchTargetAsync(0) |> ignore)
+    member _.VrModeCommand = RelayCommand(fun () -> this.SwitchTargetAsync(1) |> ignore)
+    member _.TargetHint = if switchingTarget then "Stopping LIVE FLOW and switching mode…" else "Choose Desktop or VR. Switching stops the current session; press Start for the selected mode."
+    member _.IsVr = isVr()
+    member _.IsDesktop = not (isVr())
+    member _.CanChangeTarget = not switchingTarget && not stopping
+    member _.CanControlVr = isVr() && vr.Active && not amdBlocked
+    member _.VrScale
+        with get() = vrNumber "work_scale"
+        and set value = if Double.IsFinite(value) then vrSet "work_scale" (JsonValue.Create(Math.Clamp(value, 0.15, 0.65)))
+    member _.VrActualState =
+        match vrStatus() with
+        | Some s when vr.Active -> sprintf "Actual: %s · DLSS 5 %s · Fast %s" (s["state"].GetValue<string>()) (if s["nr_applied"].GetValue<bool>() then "applied" else "off") (if s["fast_applied"].GetValue<bool>() then "applied" else "off")
+        | _ -> "Actual: unavailable · DLSS 5 off · Fast off"
+    member _.VrDetail =
+        match vrStatus() with
+        | Some s -> try s["message"].GetValue<string>() with _ -> ""
+        | _ -> "Driver status is missing or stale. Complete first-time registration, restart SteamVR, then launch a VR application."
+    member _.VrRequested = sprintf "Requested: DLSS 5 %s · Fast %s" (if vr.GetBool("nr") then "on" else "off") (if vr.GetBool("fast") then "on" else "off")
+    member _.VrTelemetry =
+        match vrStatus() with
+        | Some s ->
+            try
+                let timing =
+                    try sprintf " · Stereo %.2f ms · Actual NR passes %d" (float(s["pair_us"].GetValue<int64>()) / 1000.) (s["applied_passes"].GetValue<int>())
+                    with _ -> ""
+                sprintf "Processed %d · Skipped %d · Eye L %.2f ms / R %.2f ms · NR %d × %d per eye%s"
+                    (s["processed"].GetValue<int64>()) (s["skipped"].GetValue<int64>())
+                    (float(s["left_us"].GetValue<int64>()) / 1000.) (float(s["right_us"].GetValue<int64>()) / 1000.)
+                    (s["work_width"].GetValue<int>()) (s["work_height"].GetValue<int>())
+                    timing
+            with _ -> ""
+        | _ -> ""
+    member _.InstallVrDriverCommand = RelayCommand(fun () ->
+        try
+            let script = Path.Combine(vr.RootDirectory, "register.cmd")
+            if not (File.Exists(script)) then failwith ("Registration script not found: " + script)
+            Process.Start(ProcessStartInfo(script, UseShellExecute=true)) |> ignore
+        with ex -> setError ex.Message)
+    member _.IsRunning = if isVr() then vr.Active else child.IsSome
+    member _.FastMultiPassEnabled
+        with get () = if isVr() then vr.GetBool("fast") else fastEnabled
+        and set (value: bool) =
+            if isVr() then vrSet "fast" (JsonValue.Create(value))
+            elif this.CanEditFastMultiPass && value <> fastEnabled then
                 fastEnabled <- value
                 saveFast ()
                 notify ()
     member _.CanEditFastMultiPass = not stopping
     member _.FastReferenceTarget
-        with get () = fastTarget
+        with get () = if isVr() then vrNumber "target" else fastTarget
         and set value =
-            if this.CanEditFastMultiPass && Double.IsFinite(value) then
+            if isVr() && Double.IsFinite(value) then vrSet "target" (JsonValue.Create(int (Math.Clamp(Math.Round(value), 1., 6.))))
+            elif this.CanEditFastMultiPass && Double.IsFinite(value) then
                 let next = Math.Clamp(Math.Round(value), 1., 6.)
                 if next <> fastTarget then
                     fastTarget <- next
                     saveFast ()
                     this.RaisePropertyChanged("FastReferenceTarget")
     member _.FastStabilityAmount
-        with get () = fastStability
+        with get () = if isVr() then vrNumber "stability" else fastStability
         and set value =
-            if this.CanEditFastMultiPass && Double.IsFinite(value) then
+            if isVr() && Double.IsFinite(value) then vrSet "stability" (JsonValue.Create(Math.Clamp(Math.Round(value, 2), 0., 0.9)))
+            elif this.CanEditFastMultiPass && Double.IsFinite(value) then
                 let next = Math.Clamp(Math.Round(value, 2), 0., 0.9)
                 if next <> fastStability then
                     fastStability <- next
@@ -600,8 +694,13 @@ type ScreenViewModel(?settingsDirectory: string) as this =
                     this.RaisePropertyChanged("FastStabilityAmount")
     member this.FastMultiPassOnCommand = RelayCommand(fun () -> this.FastMultiPassEnabled <- true)
     member this.FastMultiPassOffCommand = RelayCommand(fun () -> this.FastMultiPassEnabled <- false)
-    member _.IsPreparing = child.IsSome && not stopping && (preparing || not ready || (flag "nr" false && state["gpu_ok"] = null))
-    member _.PassCount with get () = float(this.PassIndex + 1) and set (v: float) = setNumber "passes" (Math.Clamp(Math.Round(v), 1., 6.))
+    member _.FastModeHint =
+        if isVr() then sprintf "Fast runs 1-pass NR per eye with measured Multi-pass matching. Fast OFF restores normal Multi-pass at %g× per eye." (vrNumber "passes")
+        else Localization.current.LfFastMultiPassHint
+    member _.IsPreparing = if isVr() then vr.Active && (match vrStatus() with Some s -> s["state"].GetValue<string>() = "starting" | _ -> true) else child.IsSome && not stopping && (preparing || not ready || (flag "nr" false && state["gpu_ok"] = null))
+    member _.PassCount
+        with get () = float(this.PassIndex + 1)
+        and set (v: float) = if Double.IsFinite(v) then this.PassIndex <- int(Math.Clamp(Math.Round(v), 1., 6.)) - 1
     /// Every slider in the card carries its own value in its own label, and
     /// nothing sits between two columns to be read as the wrong slider's
     /// number (user: "there is a 1x in front of halo reduction"). It also
@@ -677,17 +776,18 @@ type ScreenViewModel(?settingsDirectory: string) as this =
     member _.ApplyQuery(value: string) =
         query <- if isNull value then "" else value.Trim()
         notify ()
+    member _.ShowDesktopProcessing = not (isVr()) && this.ShowProcessing
     member _.ShowProcessing = not amdBlocked && matches "processing dlss 5 nr dlss 4.5 fg frame generation multiplier boost network resolution fps multipass multi-pass fast detail strength 고속 디테일 강도 passes halo outline flow mfg sharpness sharpen edge smoothing anti-aliasing معالجة دقة توليد اطارات تمريرات ميلتي باس هالة حدة تنعيم حواف مضاعفة"
-    member _.ShowSource = not amdBlocked && matches "source window fullscreen clear selection application go app refresh reconnect نافذة شاشة مصدر إلغاء اختيار تحديث اتصال"
+    member _.ShowSource = not (isVr()) && not amdBlocked && matches "source window fullscreen clear selection application go app refresh reconnect نافذة شاشة مصدر إلغاء اختيار تحديث اتصال"
     member _.ShowEffect = not amdBlocked && matches "effect profile model default natural cinematic intensity local tone local structure skin structure تأثير بروفايل موديل تون بشرة قوة"
-    member _.ShowComparison = not amdBlocked && matches "comparison before after wipe split مقارنة قبل بعد خط"
-    member _.ShowSettings = not amdBlocked && matches "settings processing gpu display motion estimation cpu nvofa skip static frames hdr compatibility إعدادات كرت شاشة حركة"
-    member _.ShowCapture = not amdBlocked && matches "capture screenshot printscreen windows win shift s obs recording spout2 plugin microphone audio output folder fps rate تصوير لقطة تسجيل صوت مايك مجلد حفظ"
-    member _.ShowPresets = not amdBlocked && matches ("presets save new update rename delete apply saved name بريست حفظ اسم تعديل حذف " + String.Join(" ", items "saved_presets"))
-    member _.ShowColors = not amdBlocked && matches "colors colours color colour brightness contrast saturation warmth temperature ألوان الوان سطوع تباين تشبع دفء"
+    member _.ShowComparison = not (isVr()) && not amdBlocked && matches "comparison before after wipe split مقارنة قبل بعد خط"
+    member _.ShowSettings = not (isVr()) && not amdBlocked && matches "settings processing gpu display motion estimation cpu nvofa skip static frames hdr compatibility إعدادات كرت شاشة حركة"
+    member _.ShowCapture = not (isVr()) && not amdBlocked && matches "capture screenshot printscreen windows win shift s obs recording spout2 plugin microphone audio output folder fps rate تصوير لقطة تسجيل صوت مايك مجلد حفظ"
+    member _.ShowPresets = not (isVr()) && not amdBlocked && matches ("presets save new update rename delete apply saved name بريست حفظ اسم تعديل حذف " + String.Join(" ", items "saved_presets"))
+    member _.ShowColors = not (isVr()) && not amdBlocked && matches "colors colours color colour brightness contrast saturation warmth temperature ألوان الوان سطوع تباين تشبع دفء"
     member _.NoSearchResults = not amdBlocked && not (this.ShowProcessing || this.ShowSource || this.ShowEffect || this.ShowComparison || this.ShowColors || this.ShowSettings || this.ShowCapture || this.ShowPresets)
-    member _.IsReady = ready && not stopping
-    member _.CanStart = child.IsNone && not amdBlocked
+    member _.IsReady = if isVr() then vr.Active && not stopping && (match vrStatus() with Some s -> List.contains (s["state"].GetValue<string>()) ["ready"; "applied"; "off"] | None -> false) else ready && not stopping
+    member _.CanStart = child.IsNone && not vr.Active && not amdBlocked && not switchingTarget
 
     // ---- AMD MODE -------------------------------------------------------
     member _.IsAmdBlocked = amdBlocked
@@ -697,9 +797,15 @@ type ScreenViewModel(?settingsDirectory: string) as this =
     member this.SetAmdBlocked(value: bool) =
         if amdBlocked <> value then
             amdBlocked <- value
-            if value && child.IsSome then this.StopAsync() |> ignore
+            if value && (child.IsSome || vr.Active) then this.StopAsync() |> ignore
             notify ()
-    member _.Status = if amdBlocked then "Unavailable in AMD MODE" else status
+    member _.Status =
+        if amdBlocked then "Unavailable in AMD MODE"
+        elif isVr() then
+            if not vr.Active then "off"
+            elif vr.Error <> "" then "error — " + vr.Error
+            else match vrStatus() with Some s -> s["state"].GetValue<string>() | None -> "waiting_source — driver unavailable"
+        else status
     member _.Error = error
     member _.HasError = not (String.IsNullOrWhiteSpace(error))
     member _.HasFgInfo = state["fg_error"] <> null
@@ -743,7 +849,9 @@ type ScreenViewModel(?settingsDirectory: string) as this =
             motionLabelsFor <- l.Code
         motionLabels
     member _.PassOptions = passOptions
-    member _.PassIndex with get () = int (number "passes" 1.0) - 1 and set v = if v >= 0 && v <= 5 then setNumber "passes" (float (v + 1))
+    member _.PassIndex
+        with get () = int (if isVr() then vrNumber "passes" else number "passes" 1.0) - 1
+        and set v = if v >= 0 && v <= 5 then if isVr() then vrSet "passes" (JsonValue.Create(v+1)) else setNumber "passes" (float (v+1))
     member _.FrameInfo = sprintf "Frames: %.0f   •   Output: %s" (number "frames" 0.0) (str "screen_size" "—")
     member this.HasStepDown = this.StepDownInfo <> ""
 
@@ -768,7 +876,9 @@ type ScreenViewModel(?settingsDirectory: string) as this =
         | null -> ""
         | v -> if v.GetValue<bool>() then "Frame generation active" else "Frame generation could not start on this GPU."
 
-    member _.Nr with get () = ready && flag "nr" false and set v = setBool "nr" v
+    member _.Nr
+        with get () = if isVr() then vr.GetBool("nr") else ready && flag "nr" false
+        and set v = if isVr() then (if vr.Active then vrSet "nr" (JsonValue.Create(v))) else setBool "nr" v
     member _.Boost with get () = flag "nr_small" true and set v = setBool "nr_small" v
     member _.FrameGeneration with get () = ready && flag "frame_generation" false and set v = setBool "frame_generation" v
     member _.Hdr with get () = flag "hdr" false and set v = setBool "hdr" v
@@ -803,12 +913,12 @@ type ScreenViewModel(?settingsDirectory: string) as this =
     member _.FlowMultiplierIndex
         with get () = int (number "flow_multiplier" 2.0) - 2
         and set v = if v >= 0 && v <= 4 then setNumber "flow_multiplier" (float (v + 2))
-    member _.Intensity with get () = number "intensity" 1.0 and set v = setNumber "intensity" v
-    member _.LocalTone with get () = number "local_tone" 0.5 and set v = setNumber "local_tone" v
-    member _.LocalStructure with get () = number "local_structure" 1.0 and set v = setNumber "local_structure" v
-    member _.SkinStructure with get () = number "skin_structure" -1.0 and set v = setNumber "skin_structure" v
+    member _.Intensity with get () = (if isVr() then vrNumber "intensity" else number "intensity" 1.0) and set v = setNumber "intensity" v
+    member _.LocalTone with get () = (if isVr() then vrNumber "local_tone" else number "local_tone" 0.5) and set v = setNumber "local_tone" v
+    member _.LocalStructure with get () = (if isVr() then vrNumber "local_structure" else number "local_structure" 1.0) and set v = setNumber "local_structure" v
+    member _.SkinStructure with get () = (if isVr() then vrNumber "skin_structure" else number "skin_structure" -1.0) and set v = setNumber "skin_structure" v
     member _.Split with get () = number "split" 0.0 and set v = setNumber "split" v
-    member _.ModelIndex with get () = int (number "style" 1.0) and set v = if v >= 0 then setNumber "style" (float v)
+    member _.ModelIndex with get () = int (if isVr() then vrNumber "style" else number "style" 1.0) and set v = if v >= 0 then setNumber "style" (float v)
     member _.MultiplierIndex with get () = int (number "frame_multiplier" 2.0) - 2 and set v = if v >= 0 then setNumber "frame_multiplier" (float (v + 2))
     member _.Profile with get () = str "profile" "Natural" and set v = setString "profile" v
     member _.Gpu with get () = str "gpu" "" and set v = setString "gpu" v
@@ -829,7 +939,8 @@ type ScreenViewModel(?settingsDirectory: string) as this =
             if v = 0 then setString "motion_backend" "nvofa"
             elif v = 1 then setString "motion_backend" "cpu"
     member _.Start() =
-        if child.IsNone && not amdBlocked then
+        if isVr() && not amdBlocked && not switchingTarget then vr.Start(); notify()
+        elif child.IsNone && not amdBlocked && not switchingTarget then
             try
                 let native = findNative ()
                 let python = Path.Combine(native, "runtime", "python.exe")
@@ -875,6 +986,8 @@ type ScreenViewModel(?settingsDirectory: string) as this =
                 notify ()
 
     member _.StopAsync() : Task =
+        vr.Stop()
+        notify()
         numberTimer.Stop()
         pendingNumbers.Clear()
         splitTimer.Stop()

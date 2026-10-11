@@ -74,6 +74,7 @@
     <Compile Include="Services\ScreenDesktop.fs" />
     <Compile Include="ViewModels\ViewModelBase.fs" />
     <Compile Include="ViewModels\SetupViewModel.fs" />
+    <Compile Include="Services\VrLiveFlow.fs" />
     <Compile Include="ViewModels\ScreenViewModel.fs" />
     <Compile Include="ViewModels\GameCardViewModel.fs" />
     <Compile Include="ViewModels\CommunityViewModel.fs" />

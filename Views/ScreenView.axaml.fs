@@ -264,6 +264,7 @@ type ScreenView() as this =
             RoutingStrategies.Bubble,
             true
         )
+        this.DetachedFromVisualTree.Add(fun _ -> if not overlayInstance then vm().StopAsync() |> ignore)
         this.AttachedToVisualTree.Add(fun _ ->
             if not overlayInstance && hotkey.IsNone then
                 match TopLevel.GetTopLevel(this) with
@@ -347,6 +348,7 @@ type ScreenView() as this =
                     owner.Opened.Add(fun _ -> register())
                     if owner.IsVisible then register()
                     owner.Closed.Add(fun _ ->
+                        vm().StopAsync() |> ignore
                         closing <- true
                         hotkey |> Option.iter(fun h -> h.Dispose())
                         hotkey <- None
@@ -372,7 +374,8 @@ type ScreenView() as this =
     member _.ToggleOverlay() =
         // AMD MODE: nothing to show in it - the section says why instead. An
         // overlay already open when it was switched on can still be put away.
-        if not closing && vm().IsAmdBlocked then
+        if vm().IsVr then ()
+        elif not closing && vm().IsAmdBlocked then
             match overlay with
             | Some window when window.IsVisible -> window.Hide()
             | _ -> ()

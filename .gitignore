@@ -11,3 +11,10 @@ outputs/
 *.log
 *.bak
 *.user
+SteamVR/driver/engine/
+SteamVR/driver/logs/
+SteamVR/driver/tests/
+SteamVR/driver/backups/
+SteamVR/driver/control.json
+SteamVR/driver/status.json
+SteamVR/driver/package-manifest.json

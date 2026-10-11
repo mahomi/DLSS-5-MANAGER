@@ -58,6 +58,7 @@
 #include <nvsdk_ngx_helpers.h>
 
 #include "src/feed_ipc.h"
+#include "vr_gpu_protocol.h"
 
 // ---------------------------------------------------------------------------
 // Logging
@@ -67,6 +68,8 @@ static char g_log_path[MAX_PATH];
 static bool g_show_window = false;   // visible host window = the user's door to the DLSS 5 panel
 static bool g_renodx_lazy = false;   // DLSS 5 add-on is v45+ (per-present rescan, lazy adoption)
 static bool g_video_mode = false;    // stdin/stdout are a binary frame protocol in this mode
+static bool g_vr_gpu_mode = false;
+static LUID g_vr_adapter_luid = {};
 
 static void Log(const char *fmt, ...);
 
@@ -137,7 +140,7 @@ static void Log(const char *fmt, ...)
     fprintf(console, "%02u:%02u:%02u.%03u  %s\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, line);
     fflush(console);
     FILE *f = nullptr;
-    if (!g_video_mode && fopen_s(&f, g_log_path, "a") == 0 && f != nullptr)
+    if ((!g_video_mode || g_vr_gpu_mode) && fopen_s(&f, g_log_path, "a") == 0 && f != nullptr)
     {
         fprintf(f, "%02u:%02u:%02u.%03u  %s\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, line);
         fclose(f);
@@ -1185,13 +1188,23 @@ static bool InitDisguise()
             (unsigned)desc.AdapterLuid.HighPart, (unsigned)desc.AdapterLuid.LowPart);
         const bool usable = desc.VendorId == 0x10DE &&
                             !(desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE);
+        if (g_vr_gpu_mode)
+        {
+            if (usable && desc.AdapterLuid.HighPart == g_vr_adapter_luid.HighPart &&
+                desc.AdapterLuid.LowPart == g_vr_adapter_luid.LowPart)
+            { chosen = candidate; chosen_idx = static_cast<int>(i); }
+            else candidate->Release();
+            continue;
+        }
         if (want >= 0 && static_cast<int>(i) == want && usable)
         { chosen = candidate; chosen_idx = static_cast<int>(i); continue; }
         if (nvidia == nullptr && usable)
         { nvidia = candidate; nvidia_idx = static_cast<int>(i); continue; }
         candidate->Release();
     }
-    if (want >= 0 && chosen == nullptr)
+    if (g_vr_gpu_mode && chosen == nullptr)
+    { factory->Release(); Log("[vr-gpu] exact adapter LUID unavailable; refusing fallback"); return false; }
+    if (!g_vr_gpu_mode && want >= 0 && chosen == nullptr)
         Log("[host] NS_GPU=%d is not a usable NVIDIA adapter - using the first one",
             want);
     if (chosen != nullptr)
@@ -7102,6 +7115,8 @@ static int Serve(DWORD game_pid)
 
 // ---------------------------------------------------------------------------
 
+#include "vr_gpu_worker.inl"
+
 int main(int argc, char **argv)
 {
     // Per-monitor DPI awareness BEFORE any window exists. Without it, on a
@@ -7126,6 +7141,10 @@ int main(int argc, char **argv)
     if (!g_video_mode) { FILE *f = nullptr; if (fopen_s(&f, g_log_path, "w") == 0 && f) fclose(f); }
 
     Log("dlss5-feed-host64 (built %s %s)", __DATE__, __TIME__);
+
+    // Consume this mode before the desktop PID parser: a mapping name is never a PID.
+    if (argc >= 2 && strcmp(argv[1], "--vr-gpu") == 0)
+        return argc == 3 ? RunVrGpu(argv[2]) : 2;
 
     bool  test = false, hide = false, video = false;
     DWORD pid = 0;

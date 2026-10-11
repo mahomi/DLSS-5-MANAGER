@@ -1,4 +1,4 @@
-<UserControl xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" x:Class="DLSS_5_MANAGER.Views.ScreenView" x:DataType="vm:ScreenViewModel" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" ClipToBounds="True" xmlns:vm="using:DLSS_5_MANAGER.ViewModels">
+﻿<UserControl xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" x:Class="DLSS_5_MANAGER.Views.ScreenView" x:DataType="vm:ScreenViewModel" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" ClipToBounds="True" xmlns:vm="using:DLSS_5_MANAGER.ViewModels">
   <UserControl.Resources>
     <!-- The bars use PillSlider from App.axaml, shared with Settings. -->
   </UserControl.Resources>
@@ -69,7 +69,7 @@
                  doing it - rather than tucked under the status on the far
                  side, where it read as a footnote to the Overlay button. -->
             <Border Background="#12FFFFFF" BorderBrush="#1FFFFFFF" BorderThickness="1" CornerRadius="9"
-                    Padding="9,3" VerticalAlignment="Center">
+                    Padding="9,3" VerticalAlignment="Center" IsVisible="{Binding IsDesktop}">
               <TextBlock Text="{Binding GpuText}" FontSize="11" Foreground="#94A3B8" />
             </Border>
           </StackPanel>
@@ -90,7 +90,7 @@
               <!-- Each shortcut is its own button with its key on its face.
                    Clicking one opens a small panel to change that key - typed
                    in, or picked from a few that are known to be free. -->
-              <Button Classes="AppleSecondaryBtn" Content="{Binding OverlayButtonText}">
+              <Button Classes="AppleSecondaryBtn" IsVisible="{Binding IsDesktop}" Content="{Binding OverlayButtonText}">
                 <Button.Flyout>
                   <Flyout Placement="BottomEdgeAlignedRight">
                     <!-- Keys land here while the cap below is listening. -->
@@ -143,7 +143,7 @@
               <!-- The FPS counter at the top of the output screen: the base
                    frames, and with FLOW MFG / DLSS 4.5 FG the frames after it.
                    The overlay's header carries the same button. -->
-              <Button Classes="AppleSecondaryBtn" Click="OnToggleFpsCounter" Focusable="False"
+              <Button Classes="AppleSecondaryBtn" IsVisible="{Binding IsDesktop}" Click="OnToggleFpsCounter" Focusable="False"
                       ToolTip.Tip="{Binding Loc.LfFpsHint}">
                 <StackPanel Orientation="Horizontal" Spacing="7">
                   <Ellipse Width="7" Height="7" Fill="#34D399" VerticalAlignment="Center"
@@ -154,6 +154,45 @@
             </StackPanel>
           </StackPanel>
         </Grid>
+        </Border>
+        <Border Classes="ScreenCard">
+          <StackPanel Spacing="8">
+            <TextBlock Text="LIVE FLOW mode · 일반 / VR" FontWeight="Bold" />
+            <UniformGrid Columns="2" IsEnabled="{Binding CanChangeTarget}">
+              <Button x:Name="DesktopModeButton" Classes="SegmentedTab" Classes.Active="{Binding IsDesktop}" Content="Desktop · 일반 모드" Command="{Binding DesktopModeCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+              <Button x:Name="VrModeButton" Classes="SegmentedTab" Classes.Active="{Binding IsVr}" Content="SteamVR · VR 모드" Command="{Binding VrModeCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+            </UniformGrid>
+            <TextBlock Text="{Binding TargetHint}" TextWrapping="Wrap" FontSize="12" Foreground="#94A3B8" />
+          </StackPanel>
+        </Border>
+        <Border Classes="ScreenCard" IsVisible="{Binding IsVr}">
+          <StackPanel Spacing="10">
+            <TextBlock Text="SteamVR (Quest) · DLSS 5" FontSize="18" FontWeight="Bold" />
+            <TextBlock Text="First setup: close SteamVR, register the driver, then restart SteamVR. Once installed, Start and DLSS 5 on/off operate live." TextWrapping="Wrap" Foreground="#94A3B8" />
+            <Button Content="Register SteamVR driver" Command="{Binding InstallVrDriverCommand}" HorizontalAlignment="Left" />
+            <Grid ColumnDefinitions="*,Auto" IsEnabled="{Binding CanControlVr}">
+              <TextBlock Text="DLSS 5" VerticalAlignment="Center" />
+              <Border Grid.Column="1" CornerRadius="19" Padding="3" Background="#0C1014" BorderBrush="#20FFFFFF" BorderThickness="1" Width="136" Height="38">
+                <UniformGrid Columns="2">
+                  <Button Classes="SegmentedTab" Content="{Binding Loc.LfOff}" Command="{Binding NrOffCommand}" Classes.Active="{Binding !Nr}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                  <Button Classes="SegmentedTab" Content="{Binding Loc.LfOn}" Command="{Binding NrOnCommand}" Classes.Active="{Binding Nr}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                </UniformGrid>
+              </Border>
+            </Grid>
+            <TextBlock Text="{Binding VrRequested}" />
+            <TextBlock Text="{Binding VrActualState}" FontWeight="Bold" />
+            <TextBlock Text="{Binding VrDetail}" TextWrapping="Wrap" Foreground="#94A3B8" />
+            <TextBlock Text="{Binding VrTelemetry}" TextWrapping="Wrap" FontSize="12" Foreground="#94A3B8" />
+            <StackPanel x:Name="VrMultiPassControls" Spacing="8" IsEnabled="{Binding !FastMultiPassEnabled}">
+              <TextBlock Text="{Binding PassCountLabel}" />
+              <Slider Theme="{StaticResource PillSlider}" Minimum="1" Maximum="6" TickFrequency="1" IsSnapToTickEnabled="True" Value="{Binding PassCount, Mode=TwoWay}" />
+            </StackPanel>
+            <TextBlock Text="Normal Multi-pass runs NR 1–6 times per eye. Fast ON uses one NR pass; Fast OFF restores this count. Changing the count prepares both eyes again." TextWrapping="Wrap" FontSize="12" Foreground="#94A3B8" />
+            <TextBlock Text="VR processing scale (15–65%) · changes prepare both eyes asynchronously" TextWrapping="Wrap" />
+            <TextBlock Text="{Binding VrScale, StringFormat={}{0:P0}}" />
+            <Slider Theme="{StaticResource PillSlider}" Minimum="0.15" Maximum="0.65" TickFrequency="0.05" IsSnapToTickEnabled="True" Value="{Binding VrScale, Mode=TwoWay}" />
+            <TextBlock Text="Waits for both eyes to finish NR. Higher resolution and more passes can reduce frame rate. Processing stops only for errors or a prolonged lack of progress." TextWrapping="Wrap" FontSize="12" Foreground="#94A3B8" />
+          </StackPanel>
         </Border>
         <TextBlock Text="{Binding Error}" IsVisible="{Binding HasError}" Foreground="#FF9C8A" TextWrapping="Wrap" />
         <TextBlock x:Name="NoResults" Text="No Screen options match your search." IsVisible="{Binding NoSearchResults}" Foreground="#94A3B8" />
@@ -169,7 +208,7 @@
                        Text="Work on LIVE FLOW for AMD RDNA 3 and RDNA 4 cards will start soon. We're sorry - we don't have one of these cards to test on yet, which makes this very hard. Turn AMD MODE off in Settings to use LIVE FLOW on an NVIDIA card." />
           </StackPanel>
         </Border>
-        <Border x:Name="ProcessingCard" Classes="ScreenCard" IsVisible="{Binding ShowProcessing}" IsEnabled="{Binding IsReady}">
+        <Border x:Name="ProcessingCard" Classes="ScreenCard" IsVisible="{Binding ShowDesktopProcessing}" IsEnabled="{Binding IsReady}">
           <StackPanel Spacing="8">
             <TextBlock Classes="SectionTitle" Text="{Binding Loc.LfProcessing}" />
             <Grid ColumnDefinitions="*,*" ColumnSpacing="20" RowSpacing="10" RowDefinitions="Auto,Auto,Auto,Auto">
@@ -290,7 +329,7 @@
                 </UniformGrid>
               </Border>
             </Grid>
-            <TextBlock Text="{Binding Loc.LfFastMultiPassHint}" FontSize="12" Foreground="#94A3B8" TextWrapping="Wrap" />
+            <TextBlock Text="{Binding FastModeHint}" FontSize="12" Foreground="#94A3B8" TextWrapping="Wrap" />
             <StackPanel Spacing="8" IsEnabled="{Binding CanEditFastMultiPass}">
               <StackPanel Spacing="8" IsEnabled="{Binding FastMultiPassEnabled}">
                 <Grid ColumnDefinitions="*,Auto">
@@ -327,7 +366,7 @@
           <StackPanel Spacing="8">
             <TextBlock Classes="SectionTitle" Text="{Binding Loc.LfEffect}" />
             <Grid ColumnDefinitions="*,*" ColumnSpacing="20" RowSpacing="10" RowDefinitions="Auto,Auto,Auto">
-              <StackPanel Spacing="8" Grid.Column="0" Grid.Row="0">
+              <StackPanel Spacing="8" Grid.Column="0" Grid.Row="0" IsVisible="{Binding IsDesktop}">
                 <TextBlock Text="{Binding Loc.LfProfile}" />
                 <ComboBox Classes="GlassComboBox" ItemsSource="{Binding Profiles}" SelectedItem="{Binding Profile, Mode=TwoWay}" />
               </StackPanel>
@@ -411,7 +450,31 @@
         <Border x:Name="PresetsCard" Classes="ScreenCard" IsEnabled="{Binding IsReady}" IsVisible="{Binding ShowPresets}">
           <StackPanel Spacing="12">
             <TextBlock Classes="SectionTitle" Text="{Binding Loc.LfMyPresets}" />
-            <TextBlock Text="{Binding Error}" IsVisible="{Binding HasError}" Foreground="#FF9C8A" TextWrapping="Wrap" />
+            <Border Classes="ScreenCard">
+          <StackPanel Spacing="8">
+            <TextBlock Text="Processing target" FontWeight="Bold" />
+            <ComboBox ItemsSource="{Binding Targets}" SelectedIndex="{Binding TargetIndex, Mode=TwoWay}" IsEnabled="{Binding CanChangeTarget}" HorizontalAlignment="Stretch" />
+            <TextBlock Text="Stop LIVE FLOW to change the target." FontSize="12" Foreground="#94A3B8" />
+          </StackPanel>
+        </Border>
+        <Border Classes="ScreenCard" IsVisible="{Binding IsVr}">
+          <StackPanel Spacing="10">
+            <TextBlock Text="SteamVR (Quest) · DLSS 5" FontSize="18" FontWeight="Bold" />
+            <TextBlock Text="First setup: close SteamVR, register the driver, then restart SteamVR. Once installed, Start and DLSS 5 on/off operate live." TextWrapping="Wrap" Foreground="#94A3B8" />
+            <Button Content="Register SteamVR driver" Command="{Binding InstallVrDriverCommand}" HorizontalAlignment="Left" />
+            <StackPanel Orientation="Horizontal" Spacing="8" IsEnabled="{Binding CanControlVr}">
+              <Button Content="DLSS 5 off" Command="{Binding NrOffCommand}" Classes.Active="{Binding !Nr}" />
+              <Button Content="DLSS 5 on" Command="{Binding NrOnCommand}" Classes.Active="{Binding Nr}" />
+            </StackPanel>
+            <TextBlock Text="{Binding VrRequested}" />
+            <TextBlock Text="{Binding VrActualState}" FontWeight="Bold" />
+            <TextBlock Text="{Binding VrDetail}" TextWrapping="Wrap" Foreground="#94A3B8" />
+            <TextBlock Text="VR processing scale (15–65%) · changes prepare both eyes asynchronously" TextWrapping="Wrap" />
+            <TextBlock Text="{Binding VrScale, StringFormat={}{0:P0}}" />
+            <Slider Theme="{StaticResource PillSlider}" Minimum="0.15" Maximum="0.65" TickFrequency="0.05" IsSnapToTickEnabled="True" Value="{Binding VrScale, Mode=TwoWay}" />
+          </StackPanel>
+        </Border>
+        <TextBlock Text="{Binding Error}" IsVisible="{Binding HasError}" Foreground="#FF9C8A" TextWrapping="Wrap" />
             <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
               <StackPanel Spacing="6">
                 <TextBlock Text="{Binding Loc.LfPresetName}" />

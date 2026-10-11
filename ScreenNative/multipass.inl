@@ -12,6 +12,7 @@ static ID3D12Resource* g_pass_scratch = nullptr;
 static bool g_pass_ready = false;
 static bool g_pass_fast = false;
 static unsigned g_pass_count = 1;
+static unsigned g_vr_requested_passes = 1;
 
 static void ReleaseMultiPass()
 {
@@ -28,7 +29,8 @@ static void ReleaseMultiPass()
 
 static bool EnsureMultiPass(VideoState& v)
 {
-    if (g_pass_ready && g_pass_fast == FastMultiPassRequested()) return true;
+    const unsigned vrWanted=FastMultiPassRequested()?1:g_vr_requested_passes;
+    if (g_pass_ready && g_pass_fast == FastMultiPassRequested() && (!g_vr_gpu_mode || g_pass_count==vrWanted)) return true;
     if (g_pass_ready) {
         // A UI mode change retires only these GPU resources. The capture,
         // controller and primary NR feature keep running in the same process.
@@ -36,7 +38,7 @@ static bool EnsureMultiPass(VideoState& v)
             Log("[fast-multipass] mode change drain failed"); return false;
         }
         ReleaseMultiPass();
-        ReleaseFastMultiPass();
+        if(!g_vr_gpu_mode)ReleaseFastMultiPass();
     }
     g_pass_fast = FastMultiPassRequested();
     // Opt-in approximation is exclusive with real sequential NR layers.
@@ -54,7 +56,7 @@ static bool EnsureMultiPass(VideoState& v)
     // afford it asked for it. Each pass is another whole run of the network,
     // so this is a straight multiplier on the frame time - the UI says so
     // beside the slider.
-    g_pass_count = count >= 1 && count <= (int)kMaxPasses ? count : 1;
+    g_pass_count = g_vr_gpu_mode?g_vr_requested_passes:(count >= 1 && count <= (int)kMaxPasses ? count : 1);
     if (g_pass_count == 1) { g_pass_ready = true; return true; }
     ID3D12Resource* result = v.nr_small ? v.nr_out : v.output;
     auto desc = result->GetDesc();
@@ -66,6 +68,7 @@ static bool EnsureMultiPass(VideoState& v)
         // No room even for the scratch texture: one layer, which is the
         // feature the worker already has and always works.
         Log("[multipass] scratch texture failed - running 1 layer");
+        if(g_vr_gpu_mode)return false;
         g_pass_count = 1;
         g_pass_ready = true;
         return true;
@@ -77,12 +80,13 @@ static bool EnsureMultiPass(VideoState& v)
     for (unsigned i = 0; i < wanted - 1; ++i) {
         h.feature = nullptr;
         NVSDK_NGX_Result resultCode = NVSDK_NGX_Result_Fail;
-        const bool ok = CreateFeature(v.w, v.hgt, flags, &resultCode,
+        const bool ok = CreateFeature(g_vr_gpu_mode && v.nr_small?v.nr_w:v.w,g_vr_gpu_mode && v.nr_small?v.nr_h:v.hgt,g_vr_gpu_mode?0:flags, &resultCode,
             v.nr_small || !v.upscale ? 0 : v.full_w, v.nr_small || !v.upscale ? 0 : v.full_h);
         g_extra_features[i] = ok ? h.feature : nullptr;
         h.feature = first;
         if (!ok)
         {
+            if(g_vr_gpu_mode){Log("[vr-gpu] requested multi-pass layer %u failed 0x%08X; refusing reduced pass count",i+2,unsigned(resultCode));return false;}
             // Out of video memory is the usual reason at five or six layers
             // on an 8 GB card. The layers that were made are kept and run -
             // failing the whole evaluate here used to end the worker, so

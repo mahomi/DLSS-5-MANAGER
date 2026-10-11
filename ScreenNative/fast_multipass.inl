@@ -14,6 +14,8 @@ static UINT64 g_fast_settings_revision = 0;
 // No controller protocol changes, process restart or environment variables.
 static void UpdateFastMultiPassSettings(const wchar_t *testPath = nullptr)
 {
+    // VR packet memory owns the frame controls; never overwrite it from desktop files.
+    if (g_vr_gpu_mode) return;
     const ULONGLONG now = GetTickCount64();
     if (now < g_fast_next_poll) return;
     g_fast_next_poll = now + 100;

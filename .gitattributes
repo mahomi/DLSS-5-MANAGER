@@ -1,0 +1,2 @@
+# Preserve the vendored Valve SDK without changing its upstream whitespace.
+SteamVR/driver/sdk/* -whitespace

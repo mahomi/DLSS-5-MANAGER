@@ -3,6 +3,7 @@
 
 static bool NvofaRequested()
 {
+    if(g_vr_gpu_mode)return true;
     char value[16] = {};
     return GetEnvironmentVariableA("NS_MOTION_BACKEND", value, sizeof(value)) && strcmp(value, "nvofa") == 0;
 }
@@ -219,7 +220,7 @@ static bool RunNvofa(VideoState &v, bool reset, UINT64 *submitted)
     ID3D12Resource *source = g_ofa_gray != nullptr ? g_ofa_gray : g_gray_uav;
     const UINT source_w = g_ofa_gray != nullptr ? g_ofa_w : g_gray_w;
     const UINT source_h = g_ofa_gray != nullptr ? g_ofa_h : g_gray_h;
-    if (!g_gray_mapped || source == nullptr || !EnsureNvofa(source_w, source_h)) return false;
+    if ((!g_gray_mapped && !g_vr_gpu_mode) || source == nullptr || !EnsureNvofa(source_w, source_h)) return false;
     const bool new_reverse = f.bidirectional && (!f.reverse || f.reverse->GetDesc().Width != v.w || f.reverse->GetDesc().Height != v.hgt);
     if (new_reverse) {
         if (!WaitFenceValue(h.fence, h.fence_value, 30000)) return NvofaError("resize reverse fence", NV_OF_ERR_GENERIC);
