@@ -1,0 +1,13 @@
+bin/
+obj/
+artifacts/
+outputs/
+*.obj
+*.exp
+*.pdb
+*.exe
+*.dll
+*.lib
+*.log
+*.bak
+*.user

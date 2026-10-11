@@ -57,7 +57,7 @@
 #include <nvsdk_ngx.h>
 #include <nvsdk_ngx_helpers.h>
 
-#include "../src/feed_ipc.h"
+#include "src/feed_ipc.h"
 
 // ---------------------------------------------------------------------------
 // Logging
@@ -645,7 +645,7 @@ static void ProfileCapture(double acquire_start, UINT64 source_qpc, const char *
     if (source_qpc) g_previous_source_qpc = source_qpc;
 }
 
-enum ProfileStage { PS_SWIZZLE, PS_GRAY, PS_MOTION, PS_EVAL, PS_PRESENT, PS_COUNT, PS_NONE = -1 };
+enum ProfileStage { PS_SWIZZLE, PS_GRAY, PS_MOTION, PS_EVAL, PS_PRESENT, PS_COUNT, PS_STAGE_NONE = -1 };
 static const char *kProfileStageNames[PS_COUNT] = { "swizzle", "gray", "motion", "eval", "present" };
 static double g_ps_submit_sum[PS_COUNT], g_ps_submit_max[PS_COUNT];
 static double g_ps_wait_sum[PS_COUNT], g_ps_wait_max[PS_COUNT];
@@ -655,8 +655,8 @@ static unsigned g_ps_submit_n[PS_COUNT], g_ps_wait_n[PS_COUNT], g_ps_gpu_n[PS_CO
 static unsigned g_ps_allocator_waits;
 static double g_ps_allocator_wait_sum, g_ps_allocator_wait_max;
 static unsigned g_ps_outstanding_max;
-static int g_ps_active = PS_NONE;
-static int g_ps_slot_stage[Host::kFrames] = { PS_NONE, PS_NONE, PS_NONE };
+static int g_ps_active = PS_STAGE_NONE;
+static int g_ps_slot_stage[Host::kFrames] = { PS_STAGE_NONE, PS_STAGE_NONE, PS_STAGE_NONE };
 static UINT64 g_ps_slot_fence[Host::kFrames];
 static void CollectProfileGpuTimes();
 
@@ -732,7 +732,7 @@ static UINT64 EndCommands()
     {
         Log("[host] command list Close failed 0x%08X; nothing submitted", closed);
         g_submission_failed = true;
-        g_ps_active = PS_NONE;
+        g_ps_active = PS_STAGE_NONE;
         AbortCommands();
         return 0;
     }
@@ -748,11 +748,11 @@ static UINT64 EndCommands()
     {
         Log("[host] queue Signal failed 0x%08X", sig);
         g_submission_failed = true;
-        g_ps_active = PS_NONE;
+        g_ps_active = PS_STAGE_NONE;
         return 0;
     }
     h.alloc_fence[h.frame_slot] = v;
-    if (g_ps_active != PS_NONE && g_ps_slot_stage[h.frame_slot] != PS_NONE)
+    if (g_ps_active != PS_STAGE_NONE && g_ps_slot_stage[h.frame_slot] != PS_STAGE_NONE)
         g_ps_slot_fence[h.frame_slot] = v;
     h.frame_slot = (h.frame_slot + 1) % Host::kFrames;
     if (phase)
@@ -770,7 +770,7 @@ static UINT64 EndCommands()
         if (outstanding > g_ps_outstanding_max)
             g_ps_outstanding_max = static_cast<unsigned>(outstanding);
     }
-    g_ps_active = PS_NONE;
+    g_ps_active = PS_STAGE_NONE;
     return v;
 }
 
@@ -5401,7 +5401,7 @@ static void CollectProfileGpuTimes()
         if (first < 0) break;
         ReadProfileGpuTime(first);
         g_ps_slot_fence[first] = 0;
-        g_ps_slot_stage[first] = PS_NONE;
+        g_ps_slot_stage[first] = PS_STAGE_NONE;
     }
 }
 
@@ -5438,6 +5438,7 @@ static bool SetVerifiedU(NVSDK_NGX_Parameter *p, const char *name, unsigned int 
     return !NVSDK_NGX_FAILED(static_cast<NVSDK_NGX_Result>(p->Get(name, &got))) && got == value;
 }
 
+#include "fast_multipass.inl"
 #include "multipass.inl"
 
 // The before/after wipe for the frame being evaluated, 0 when there is none.
@@ -5452,7 +5453,13 @@ static void RecordSplit(VideoState &v, UINT split_x);
 
 static bool EvaluateVideo(VideoState &v, int reset, UINT64 *submitted = nullptr)
 {
+    UpdateFastMultiPassSettings();
     if (!EnsureMultiPass(v)) return false;
+    // Comparison rollback: apply Fast to the raw NR result, so Enhance and
+    // halo composition process its added residual as in the original path.
+    const UINT fast_w = v.nr_small ? v.nr_w : (v.upscale ? v.full_w : v.w);
+    const UINT fast_h = v.nr_small ? v.nr_h : (v.upscale ? v.full_h : v.hgt);
+    const bool fast = EnsureFastMultiPass(fast_w, fast_h);
     if (submitted) *submitted = 0;
     if (!BeginCommands()) return false;
     const bool ts = ProfileGpuBegin(PS_EVAL);
@@ -5520,6 +5527,8 @@ static bool EvaluateVideo(VideoState &v, int reset, UINT64 *submitted = nullptr)
     g_last_eval_result = static_cast<uint32_t>(result);
     if (code != 0) { AbortCommands(); Log("[pure] direct evaluate exception 0x%08X", code); return false; }
     if (ts) h.list->EndQuery(g_ts_heap, D3D12_QUERY_TYPE_TIMESTAMP, h.frame_slot * 4 + 3);
+    if (!NVSDK_NGX_FAILED(result) && fast)
+        RecordFastMultiPass(nr_color, nr_result, nw, nh, v.mv.tex, v.w, v.hgt, reset != 0, g_video_options.style);
     if (v.nr_small)
     {
         // The result is work-sized; stretch it into the full-res output the
@@ -5906,6 +5915,7 @@ static void ReleaseVideoTextures(VideoState &v)
     if (PhaseEnabled()) { ++g_capture_generation; g_previous_source_qpc = 0; g_frame_stamp = {}; }
     CloseFgResources();
     ReleaseMultiPass();
+    ReleaseFastMultiPass();
     // The shader descriptors referenced these resources - after they are
     // released the descriptors must be reissued (see BindScaleDescriptors).
     if (v.mv.tex == g_scale_dst_bound) g_scale_dst_bound = nullptr;
@@ -6257,6 +6267,7 @@ static int RunVideo()
                                         : !v.upscale);
             if (same_size && h.feature != nullptr)
             {
+                InvalidateFastTemporal(); // NR/style changes invalidate added-effect history.
                 memcpy(&g_video_options, &rc, sizeof(g_video_options));
                 HaloFromResizeFlags(rc.flags);
                 ExtrasFromResize(rc.profile);
@@ -6283,7 +6294,12 @@ static int RunVideo()
             Log("[video] RNSZ: work %ux%u -> %ux%u (full %ux%u), warmup=%u",
                 v.w, v.hgt, rc.width, rc.height, rc.full_w, rc.full_h, rc.warmup);
             // 1. Drain the GPU: the old feature must be idle before release.
-            WaitFenceValue(h.fence, h.fence_value, 2000);
+            const bool drained = WaitFenceValue(h.fence, h.fence_value, 2000);
+            if (FastMultiPassRequested() && !drained)
+            {
+                Log("[fast-multipass] resize drain failed; keeping in-flight resources alive");
+                return 9;
+            }
             // 2. Release the old feature and textures.
             SafeReleaseFeature(h.feature);
             h.feature = nullptr;
@@ -6480,6 +6496,10 @@ static int RunVideo()
             continue;
         }
         ConfigureFgFrame(fh.reserved);
+        // Poll before the static-frame skip, so a UI edit updates even a
+        // completely still desktop. The output presenter also resets its history.
+        const bool fast_settings_changed = FastMultiPassSettingsChanged();
+        if (fast_settings_changed) g_force_next_frame = true;
         const double t_frame = PhaseNow();
         const bool phase_on = PhaseEnabled();
         if (phase_on) g_frame_stamp = {};
@@ -6712,7 +6732,8 @@ static int RunVideo()
         g_hdr_split = (fh.reserved & FRAME_FLAG_SPLIT) ?
             SplitXFromFlags(fh.reserved, v.upscale ? v.full_w : v.w) : UINT_MAX;
         const bool bypass = (fh.reserved & FRAME_FLAG_BYPASS) != 0 || h.feature == nullptr;
-        g_fg_reset = frame == 0 || fh.reset != 0 || bypass != g_last_bypass
+        if (bypass) InvalidateFastTemporal();
+        g_fg_reset = frame == 0 || fh.reset != 0 || bypass != g_last_bypass || fast_settings_changed
                      || previous_hdr_split != g_hdr_split
                      || (stall_pending && source_fresh);
         g_last_bypass = bypass;
@@ -6835,6 +6856,11 @@ static void CleanupVideoNgx()
     CloseNvofa();
     CloseFgResources();
     ReleaseMultiPass();
+    // Normal shutdown must retire the last dispatch before releasing its heap.
+    if (g_fast_copy && !WaitFenceValue(h.fence, h.fence_value, 60000))
+        Log("[fast-multipass] shutdown drain failed; resources held until process exit");
+    else
+        ReleaseFastMultiPass();
     if (h.feature != nullptr)
     {
         SafeReleaseFeature(h.feature);

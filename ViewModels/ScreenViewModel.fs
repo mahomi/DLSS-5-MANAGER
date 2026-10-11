@@ -11,10 +11,15 @@ open CommunityToolkit.Mvvm.Input
 open DLSS_5_MANAGER.Services
 
 /// Owns only the embedded Screen session. The games installer never uses this state.
-type ScreenViewModel() as this =
+type ScreenViewModel(?settingsDirectory: string) as this =
     inherit ViewModelBase()
 
-    let dataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DLSS5Manager", "Screen")
+    let dataDir = defaultArg settingsDirectory (Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DLSS5Manager", "Screen"))
+    // Manager-owned settings: the external controller does not know these keys.
+    let fastConfig = Path.Combine(dataDir, "fast-multipass.json")
+    let mutable fastEnabled = false
+    let mutable fastStability = 0.9
+    let mutable fastTarget = 2.
     let mutable child: Process option = None
     let mutable state = JsonObject()
     let mutable ready = false
@@ -177,6 +182,21 @@ type ScreenViewModel() as this =
         error <- text
         this.RaisePropertyChanged("Error")
         this.RaisePropertyChanged("HasError")
+    let saveFast () =
+        try
+            Directory.CreateDirectory(dataDir) |> ignore
+            let cfg = JsonObject()
+            cfg["enabled"] <- JsonValue.Create(fastEnabled)
+            cfg["target"] <- JsonValue.Create(fastTarget)
+            cfg["stability"] <- JsonValue.Create(fastStability)
+            // The worker reads the complete file, never a partially written drag.
+            let temp = fastConfig + "." + Guid.NewGuid().ToString("N") + ".tmp"
+            try
+                File.WriteAllText(temp, cfg.ToJsonString())
+                File.Move(temp, fastConfig, true)
+            finally
+                if File.Exists(temp) then File.Delete(temp)
+        with ex -> setError ex.Message
     let send (message: JsonObject) =
         match child with
         | Some p when not p.HasExited ->
@@ -348,6 +368,19 @@ type ScreenViewModel() as this =
         with _ -> () // Only our JSON status records belong to the control channel.
 
     do
+        try
+            if File.Exists(fastConfig) then
+                let cfg = JsonNode.Parse(File.ReadAllText(fastConfig))
+                let enabled = cfg["enabled"].GetValue<bool>()
+                // Retired options do not select a processing path. Keep target and amount.
+                fastEnabled <- enabled
+                if cfg["target"] <> null then
+                    let value = cfg["target"].GetValue<float>()
+                    if Double.IsFinite(value) then fastTarget <- Math.Clamp(Math.Round(value), 1., 6.)
+                if cfg["stability"] <> null then
+                    let value = cfg["stability"].GetValue<float>()
+                    if Double.IsFinite(value) then fastStability <- Math.Clamp(value, 0., 0.9)
+        with _ -> ()
         try
             if File.Exists(captureConfig) then
                 let cfg = JsonNode.Parse(File.ReadAllText(captureConfig))
@@ -539,6 +572,34 @@ type ScreenViewModel() as this =
     member this.ToggleNr() = this.Nr <- not this.Nr
 
     member _.IsRunning = child.IsSome
+    member _.FastMultiPassEnabled
+        with get () = fastEnabled
+        and set value =
+            if this.CanEditFastMultiPass && value <> fastEnabled then
+                fastEnabled <- value
+                saveFast ()
+                notify ()
+    member _.CanEditFastMultiPass = not stopping
+    member _.FastReferenceTarget
+        with get () = fastTarget
+        and set value =
+            if this.CanEditFastMultiPass && Double.IsFinite(value) then
+                let next = Math.Clamp(Math.Round(value), 1., 6.)
+                if next <> fastTarget then
+                    fastTarget <- next
+                    saveFast ()
+                    this.RaisePropertyChanged("FastReferenceTarget")
+    member _.FastStabilityAmount
+        with get () = fastStability
+        and set value =
+            if this.CanEditFastMultiPass && Double.IsFinite(value) then
+                let next = Math.Clamp(Math.Round(value, 2), 0., 0.9)
+                if next <> fastStability then
+                    fastStability <- next
+                    saveFast ()
+                    this.RaisePropertyChanged("FastStabilityAmount")
+    member this.FastMultiPassOnCommand = RelayCommand(fun () -> this.FastMultiPassEnabled <- true)
+    member this.FastMultiPassOffCommand = RelayCommand(fun () -> this.FastMultiPassEnabled <- false)
     member _.IsPreparing = child.IsSome && not stopping && (preparing || not ready || (flag "nr" false && state["gpu_ok"] = null))
     member _.PassCount with get () = float(this.PassIndex + 1) and set (v: float) = setNumber "passes" (Math.Clamp(Math.Round(v), 1., 6.))
     /// Every slider in the card carries its own value in its own label, and
@@ -616,7 +677,7 @@ type ScreenViewModel() as this =
     member _.ApplyQuery(value: string) =
         query <- if isNull value then "" else value.Trim()
         notify ()
-    member _.ShowProcessing = not amdBlocked && matches "processing dlss 5 nr dlss 4.5 fg frame generation multiplier boost network resolution fps multipass multi-pass passes halo outline flow mfg sharpness sharpen edge smoothing anti-aliasing معالجة دقة توليد اطارات تمريرات ميلتي باس هالة حدة تنعيم حواف مضاعفة"
+    member _.ShowProcessing = not amdBlocked && matches "processing dlss 5 nr dlss 4.5 fg frame generation multiplier boost network resolution fps multipass multi-pass fast detail strength 고속 디테일 강도 passes halo outline flow mfg sharpness sharpen edge smoothing anti-aliasing معالجة دقة توليد اطارات تمريرات ميلتي باس هالة حدة تنعيم حواف مضاعفة"
     member _.ShowSource = not amdBlocked && matches "source window fullscreen clear selection application go app refresh reconnect نافذة شاشة مصدر إلغاء اختيار تحديث اتصال"
     member _.ShowEffect = not amdBlocked && matches "effect profile model default natural cinematic intensity local tone local structure skin structure تأثير بروفايل موديل تون بشرة قوة"
     member _.ShowComparison = not amdBlocked && matches "comparison before after wipe split مقارنة قبل بعد خط"
@@ -773,7 +834,7 @@ type ScreenViewModel() as this =
                 let native = findNative ()
                 let python = Path.Combine(native, "runtime", "python.exe")
                 let model = Path.GetFullPath(Path.Combine(native, "..", "dlss 5", "nvngx_dlssnr.dll"))
-                for path in [python; model; Path.Combine(native, "nvngx.dll"); Path.Combine(native, "nvngx_dlssg.dll")] do
+                for path in [python; model; Path.Combine(native, "nvngx.dll")] do
                     if not (File.Exists(path)) then failwith ("Screen requires: " + path)
                 Directory.CreateDirectory(dataDir) |> ignore
                 let config = Path.Combine(dataDir, "config.json")

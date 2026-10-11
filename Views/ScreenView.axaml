@@ -1,4 +1,4 @@
-﻿<UserControl xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" x:Class="DLSS_5_MANAGER.Views.ScreenView" x:DataType="vm:ScreenViewModel" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" ClipToBounds="True" xmlns:vm="using:DLSS_5_MANAGER.ViewModels">
+<UserControl xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" x:Class="DLSS_5_MANAGER.Views.ScreenView" x:DataType="vm:ScreenViewModel" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" ClipToBounds="True" xmlns:vm="using:DLSS_5_MANAGER.ViewModels">
   <UserControl.Resources>
     <!-- The bars use PillSlider from App.axaml, shared with Settings. -->
   </UserControl.Resources>
@@ -240,7 +240,7 @@
               <Grid ColumnDefinitions="168,*" ColumnSpacing="12" Grid.Column="0" Grid.Row="2" VerticalAlignment="Center">
                 <TextBlock Text="{Binding PassCountLabel}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
                            ToolTip.Tip="{Binding Loc.LfMultiPass}" />
-                <Slider Grid.Column="1" Theme="{StaticResource PillSlider}" Minimum="1" Maximum="6" TickFrequency="1" IsSnapToTickEnabled="True" Value="{Binding PassCount, Mode=TwoWay}" />
+                <Slider x:Name="StandardPassSlider" Grid.Column="1" Theme="{StaticResource PillSlider}" Minimum="1" Maximum="6" TickFrequency="1" IsSnapToTickEnabled="True" Value="{Binding PassCount, Mode=TwoWay}" IsEnabled="{Binding !FastMultiPassEnabled}" />
               </Grid>
               <Grid ColumnDefinitions="168,*" ColumnSpacing="12" Grid.Column="1" Grid.Row="2" VerticalAlignment="Center" ToolTip.Tip="{Binding Loc.LfHaloHint}">
                 <TextBlock Text="{Binding HaloLabel}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
@@ -269,6 +269,41 @@
                 <Button Classes="SegmentedTab" Content="{Binding Loc.LfFast}" Command="{Binding FastResolutionCommand}" Padding="15,4" />
                 <Button Classes="SegmentedTab" Content="{Binding Loc.LfBalanced}" Command="{Binding BalancedResolutionCommand}" Padding="15,4" />
                 <Button Classes="SegmentedTab" Content="{Binding Loc.LfQuality}" Command="{Binding QualityResolutionCommand}" Padding="15,4" />
+              </StackPanel>
+            </StackPanel>
+          </StackPanel>
+        </Border>
+        <!-- Available before the controller starts as well as during a session. -->
+        <Border x:Name="FastMultiPassCard" Classes="ScreenCard" IsVisible="{Binding ShowProcessing}">
+          <StackPanel Spacing="10">
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12" IsEnabled="{Binding CanEditFastMultiPass}">
+              <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                <TextBlock Classes="SectionTitle" Text="{Binding Loc.LfFastMultiPass}" />
+                <Border Background="#26F59E0B" BorderBrush="#55F59E0B" BorderThickness="1" CornerRadius="6" Padding="5,0" VerticalAlignment="Center">
+                  <TextBlock Text="BETA" FontSize="8.5" FontWeight="Bold" Foreground="#FCD34D" />
+                </Border>
+              </StackPanel>
+              <Border Grid.Column="1" CornerRadius="19" Padding="3" Background="#0C1014" BorderBrush="#20FFFFFF" BorderThickness="1" Width="136" Height="38">
+                <UniformGrid Columns="2">
+                  <Button x:Name="FastMultiPassOff" Classes="SegmentedTab" Classes.Active="{Binding !FastMultiPassEnabled}" Content="{Binding Loc.LfOff}" Command="{Binding FastMultiPassOffCommand}" Padding="8,6" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                  <Button x:Name="FastMultiPassOn" Classes="SegmentedTab" Classes.Active="{Binding FastMultiPassEnabled}" Content="{Binding Loc.LfOn}" Command="{Binding FastMultiPassOnCommand}" Padding="8,6" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                </UniformGrid>
+              </Border>
+            </Grid>
+            <TextBlock Text="{Binding Loc.LfFastMultiPassHint}" FontSize="12" Foreground="#94A3B8" TextWrapping="Wrap" />
+            <StackPanel Spacing="8" IsEnabled="{Binding CanEditFastMultiPass}">
+              <StackPanel Spacing="8" IsEnabled="{Binding FastMultiPassEnabled}">
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Text="{Binding Loc.LfFastReferenceTarget}" />
+                  <TextBlock Grid.Column="1" Text="{Binding FastReferenceTarget, StringFormat={}{0:F0}×}" Foreground="#94A3B8" />
+                </Grid>
+                <Slider x:Name="FastReferenceTargetSlider" Theme="{StaticResource PillSlider}" Minimum="1" Maximum="6" TickFrequency="1" IsSnapToTickEnabled="True" Value="{Binding FastReferenceTarget, Mode=TwoWay}" />
+                <Grid ColumnDefinitions="*,Auto" Margin="0,6,0,0">
+                  <TextBlock Text="{Binding Loc.LfFastStability}" />
+                  <TextBlock Grid.Column="1" Text="{Binding FastStabilityAmount, StringFormat={}{0:P0}}" Foreground="#94A3B8" />
+                </Grid>
+                <Slider x:Name="FastStabilitySlider" Theme="{StaticResource PillSlider}" Minimum="0" Maximum="0.9" TickFrequency="0.01" IsSnapToTickEnabled="True" Value="{Binding FastStabilityAmount, Mode=TwoWay}" />
+                <TextBlock Text="{Binding Loc.LfFastStabilityHint}" FontSize="12" Foreground="#94A3B8" TextWrapping="Wrap" />
               </StackPanel>
             </StackPanel>
           </StackPanel>

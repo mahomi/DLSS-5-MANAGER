@@ -10,6 +10,7 @@ static constexpr unsigned kMaxPasses = 6;
 static NVSDK_NGX_Handle* g_extra_features[kMaxPasses - 1] = {};
 static ID3D12Resource* g_pass_scratch = nullptr;
 static bool g_pass_ready = false;
+static bool g_pass_fast = false;
 static unsigned g_pass_count = 1;
 
 static void ReleaseMultiPass()
@@ -21,12 +22,31 @@ static void ReleaseMultiPass()
     if (g_pass_scratch) g_pass_scratch->Release();
     g_pass_scratch = nullptr;
     g_pass_ready = false;
+    g_pass_fast = false;
     g_pass_count = 1;
 }
 
 static bool EnsureMultiPass(VideoState& v)
 {
-    if (g_pass_ready) return true;
+    if (g_pass_ready && g_pass_fast == FastMultiPassRequested()) return true;
+    if (g_pass_ready) {
+        // A UI mode change retires only these GPU resources. The capture,
+        // controller and primary NR feature keep running in the same process.
+        if (h.fence_value && !WaitFenceValue(h.fence, h.fence_value, 2000)) {
+            Log("[fast-multipass] mode change drain failed"); return false;
+        }
+        ReleaseMultiPass();
+        ReleaseFastMultiPass();
+    }
+    g_pass_fast = FastMultiPassRequested();
+    // Opt-in approximation is exclusive with real sequential NR layers.
+    // Even if post-processing setup fails, stay at one NR evaluation.
+    if (FastMultiPassRequested()) {
+        g_pass_count = 1;
+        g_pass_ready = true;
+        Log("[fast-multipass] UI enabled (1 NR layer)");
+        return true;
+    }
     char value[8] = {};
     GetEnvironmentVariableA("DLSS_MANAGER_PASSES", value, sizeof(value));
     const int count = atoi(value);

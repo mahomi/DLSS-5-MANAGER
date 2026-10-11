@@ -1,4 +1,4 @@
-﻿{
+{
     "en": {
         "click_manage": "Click: Manage",
         "drag_move": "Drag: Move",
@@ -174,6 +174,13 @@
         "lf_on": "On",
         "lf_enhance": "Enhance",
         "lf_multi_pass": "Multi-pass",
+        "lf_fast_multi_pass": "Fast Multi-pass",
+        "lf_fast_stability": "NR/Fast color stabilization",
+        "lf_fast_stability_hint": "0% disables Fast history blending. Higher values smooth color changes but may lag or leave trails. Default 90%; adjust to compare faces and slow sky color changes.",
+        "lf_fast_reference": "Measured Multi-pass matching",
+        "lf_fast_reference_hint": "Matches measured 1–6-pass references with model-specific texture, structure and color coefficients. Calibrated on static scenes at NR intensity 100%, tone/structure 150%; other settings and games may differ. Uses one AI pass.",
+        "lf_fast_reference_target": "Target Multi-pass",
+        "lf_fast_multi_pass_hint": "Runs NR once with measured Multi-pass matching. Changes apply live. Fast OFF restores the original Multi-pass setting.",
         "lf_network_resolution": "Network resolution",
         "lf_fast": "Fast",
         "lf_balanced": "Balanced",
@@ -4252,6 +4259,13 @@
         "lf_on": "켬",
         "lf_enhance": "향상",
         "lf_multi_pass": "멀티패스",
+        "lf_fast_multi_pass": "Fast Multi-pass",
+        "lf_fast_stability": "NR/Fast 색 안정화 강도",
+        "lf_fast_stability_hint": "0%는 이전 프레임 혼합을 끕니다. 높이면 색 변화가 안정되지만 지연·잔상이 생길 수 있습니다. 기본값 90%; 얼굴과 하늘의 변화를 보며 조절하세요.",
+        "lf_fast_reference": "측정 기반 Multi-pass 매칭",
+        "lf_fast_reference_hint": "모델별 질감·구조·색상 계수로 측정한 1–6회 Multi-pass 결과에 근접시킵니다. 정지 장면에서 NR 강도 100%, 톤/구조 150%로 측정했으며 다른 설정과 게임에서는 차이가 날 수 있습니다. AI는 한 번 실행합니다.",
+        "lf_fast_reference_target": "목표 Multi-pass",
+        "lf_fast_multi_pass_hint": "NR을 한 번 실행하고 측정 기반 Multi-pass 매칭을 적용합니다. 변경은 즉시 반영되며, Fast를 끄면 기존 Multi-pass 설정으로 돌아갑니다.",
         "lf_network_resolution": "네트워크 해상도",
         "lf_fast": "빠름",
         "lf_balanced": "균형",
